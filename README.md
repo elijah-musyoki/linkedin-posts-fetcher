@@ -15,8 +15,8 @@ A TypeScript CLI tool to fetch posts from LinkedIn profiles for a specified time
 
 ## Prerequisites
 
-- Node.js 18+ (for `node:util/parseArgs`)
-- TypeScript 5.0+ (for type stripping)
+- Node.js 18+
+- TypeScript 5.0+
 - LinkedIn account (for cookies)
 
 ## Installation
@@ -53,31 +53,58 @@ LINKEDIN_JSESSIONID=ajax:7736944...
 ### 3. Run
 
 ```bash
-# Using CLI
-node src/cli.ts fetch --profile yolandyan --months 6
+# Single profile
+node src/cli.ts yolandyan
 
-# Or using environment variables
-PROFILE_IDENTIFIER=yolandyan MONTHS_TO_FETCH=6 node src/fetch-posts.ts
+# Multiple profiles
+node src/cli.ts yolandyan satyanadella -m 3
+
+# From URL
+node src/cli.ts https://linkedin.com/in/yolandyan
 ```
 
 ## Usage
 
+```
+linkedin-fetcher/1.0.0
+
+Usage:
+  $ linkedin-fetcher [profiles...]
+
+Commands:
+  [profiles...]  Fetch posts from LinkedIn profiles
+
+Options:
+  -m, --months <months>  Number of months to fetch (default: 6)
+  -c, --config <file>    JSON config file with profiles
+  -o, --output <dir>     Output directory (default: output)
+  --batch-size <size>    Posts per API call (default: 50)
+  -v, --version          Display version number
+  -h, --help             Display this message
+
+Examples:
+  linkedin-fetcher yolandyan
+  linkedin-fetcher yolandyan satyanadella -m 3
+  linkedin-fetcher https://linkedin.com/in/yolandyan
+  linkedin-fetcher --config profiles.json
+```
+
 ### Single Profile
 
 ```bash
-node src/cli.ts fetch --profile yolandyan --months 6
+node src/cli.ts yolandyan -m 6
 ```
 
 ### Multiple Profiles
 
 ```bash
-node src/cli.ts fetch --profile yolandyan --profile satyanadella --months 3
+node src/cli.ts yolandyan satyanadella -m 3
 ```
 
 ### Using LinkedIn URLs
 
 ```bash
-node src/cli.ts fetch --profile https://linkedin.com/in/yolandyan --months 6
+node src/cli.ts https://linkedin.com/in/reidhoffman -m 12
 ```
 
 ### Config File
@@ -94,18 +121,8 @@ Create `profiles.json`:
 ```
 
 ```bash
-node src/cli.ts fetch --config profiles.json
+node src/cli.ts --config profiles.json
 ```
-
-### CLI Options
-
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--profile` | `-p` | Profile identifier or URL | From env |
-| `--months` | `-m` | Months to fetch back | 6 |
-| `--config` | `-c` | JSON config file | - |
-| `--output` | `-o` | Output directory | `output` |
-| `--help` | `-h` | Show help | - |
 
 ## Configuration
 
@@ -210,22 +227,23 @@ cat logs/fetcher.log | jq 'select(.level == 40)'  # warnings
 
 ```
 src/
-├── cli.ts              # CLI entry point
+├── cli.ts              # CLI entry point (cac)
 ├── fetch-posts.ts      # Core library
 ├── profile-parser.ts   # Parse profile URLs/identifiers
 ├── rate-limiter.ts     # Exponential backoff + jitter
 ├── logger.ts           # Pino multistream logging
 ├── date-utils.ts       # LinkedIn date parsing
-├── output.ts          # JSON/CSV file saving
-├── constants.ts       # Configuration values
-├── env.ts             # Typed env parsing
-├── errors.ts          # Custom error types
-└── types.ts          # TypeScript interfaces
+├── output.ts           # JSON/CSV file saving
+├── constants.ts        # Configuration values
+├── env.ts              # Typed env parsing
+├── errors.ts           # Custom error types
+└── types.ts            # TypeScript interfaces
 ```
 
 ## Credits
 
 - **Library**: [@florydev/linkedin-api-voyager](https://github.com/Floryvibla/linkedin-api-voyager)
+- **CLI**: [cac](https://github.com/cacjs/cac)
 - **Author**: Flory Muenge Tshiteya
 
 ## Disclaimer
