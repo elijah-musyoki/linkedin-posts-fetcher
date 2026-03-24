@@ -238,7 +238,7 @@ This project depends on:
 
 **Author:** Flory Muenge Tshiteya
 
-**Note:** This is a single-maintainer project. We've cloned the source locally (`/tmp/linkedin-api-voyager/`) and can vendor it if needed. The real risk is LinkedIn API changes, not maintainer abandonment.
+**Note:** This is a single-maintainer project. The real risk is LinkedIn API changes, not maintainer abandonment.
 
 ### Project Structure
 
