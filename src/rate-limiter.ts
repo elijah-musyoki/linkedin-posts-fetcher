@@ -6,6 +6,7 @@ import {
   RATE_LIMIT_INITIAL_DELAY_MS,
   RATE_LIMIT_MAX_DELAY_MS,
   MAX_RETRIES,
+  API_TIMEOUT_MS,
 } from './constants.ts';
 
 const log = createLogger('rate-limiter');
@@ -20,6 +21,17 @@ const RATE_LIMIT_INDICATORS = new Set([
   'blocked',
   'captcha',
   'challenge',
+]);
+
+// Timeout indicators
+const TIMEOUT_INDICATORS = new Set([
+  'etimedout',
+  'econnrefused',
+  'econnreset',
+  'socket hang up',
+  'timeout',
+  'timed out',
+  'network error',
 ]);
 
 /**
@@ -60,8 +72,33 @@ export async function waitBetweenBatches(): Promise<void> {
 }
 
 /**
+ * Check if an error indicates rate limiting
+ * Uses Set for O(1) lookup
+ */
+export function isRateLimited(message: string): boolean {
+  const lowerMessage = message.toLowerCase();
+  for (const indicator of RATE_LIMIT_INDICATORS) {
+    if (lowerMessage.includes(indicator)) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if an error indicates a timeout
+ */
+export function isTimeout(message: string): boolean {
+  const lowerMessage = message.toLowerCase();
+  for (const indicator of TIMEOUT_INDICATORS) {
+    if (lowerMessage.includes(indicator)) return true;
+  }
+  return false;
+}
+
+/**
  * Execute a function with retry logic and exponential backoff
  * Returns the result or throws after MAX_RETRIES
+ * 
+ * Note: Timeout is handled by the axios instance (apiInstance.defaults.timeout)
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -75,6 +112,26 @@ export async function withRetry<T>(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       const message = lastError.message;
+      
+      // Check if it's a timeout
+      if (isTimeout(message)) {
+        const delay = getExponentialDelay(attempt);
+        log.warn(
+          { 
+            attempt: attempt + 1, 
+            maxRetries: MAX_RETRIES,
+            waitMs: delay,
+            timeoutMs: API_TIMEOUT_MS,
+            ...context 
+          },
+          'Request timed out, retrying'
+        );
+        
+        if (attempt < MAX_RETRIES - 1) {
+          await sleep(delay);
+          continue;
+        }
+      }
       
       // Check if rate limited
       if (isRateLimited(message)) {
@@ -95,22 +152,10 @@ export async function withRetry<T>(
         }
       }
       
-      // Non-rate-limit error or max retries reached
+      // Non-retryable error or max retries reached
       throw lastError;
     }
   }
   
   throw lastError;
-}
-
-/**
- * Check if an error indicates rate limiting
- * Uses Set for O(1) lookup
- */
-export function isRateLimited(message: string): boolean {
-  const lowerMessage = message.toLowerCase();
-  for (const indicator of RATE_LIMIT_INDICATORS) {
-    if (lowerMessage.includes(indicator)) return true;
-  }
-  return false;
 }

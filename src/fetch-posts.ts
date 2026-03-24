@@ -1,13 +1,13 @@
 // LinkedIn Posts Fetcher - Core library
 import 'dotenv/config';
-import { Client, getUserPosts, extractProfileIdLinkedin } from '@florydev/linkedin-api-voyager';
+import { Client, getUserPosts, extractProfileIdLinkedin, apiInstance } from '@florydev/linkedin-api-voyager';
 import type { LinkedInPost, FetchOptions, FetchResult } from './types.ts';
 import { missingCredentials, profileNotFound } from './errors.ts';
 import { createLogger } from './logger.ts';
 import { getCutoffDate, isWithinDateRange, normalizePost } from './date-utils.ts';
 import { saveOutputs } from './output.ts';
 import { withRetry, waitBetweenBatches } from './rate-limiter.ts';
-import { DEFAULT_BATCH_SIZE, DEFAULT_OUTPUT_DIR, ENV } from './constants.ts';
+import { DEFAULT_BATCH_SIZE, DEFAULT_OUTPUT_DIR, ENV, API_TIMEOUT_MS } from './constants.ts';
 
 const log = createLogger('fetcher');
 
@@ -26,6 +26,12 @@ function getCredentials(): { liAt: string; jsessionId: string } {
 function initializeClient(credentials: { liAt: string; jsessionId: string }): void {
   log.info('Initializing LinkedIn API client');
   Client({ JSESSIONID: credentials.jsessionId, li_at: credentials.liAt });
+  
+  // Set timeout on the axios instance (library doesn't configure this)
+  if (apiInstance) {
+    apiInstance.defaults.timeout = API_TIMEOUT_MS;
+    log.debug({ timeoutMs: API_TIMEOUT_MS }, 'API timeout configured');
+  }
 }
 
 async function resolveProfileId(identifier: string): Promise<string> {

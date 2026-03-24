@@ -23,7 +23,7 @@ cli
   .option('-m, --months <months>', 'Number of months to fetch', { default: 6 })
   .option('-c, --config <file>', 'JSON config file with profiles')
   .option('-o, --output <dir>', 'Output directory', { default: 'output' })
-  .option('--batch-size <size>', 'Posts per API call', { default: 50 })
+  .option('--batch-size <size>', 'Posts per API call', { default: 20 })
   .example('linkedin-fetcher yolandyan')
   .example('linkedin-fetcher yolandyan satyanadella -m 3')
   .example('linkedin-fetcher https://linkedin.com/in/yolandyan')
@@ -53,7 +53,7 @@ cli
         identifier: p.identifier,
         months: options.months,
       }));
-    } else if (profiles.length > 0) {
+    } else if (Array.isArray(profiles) && profiles.length > 0) {
       profileInputs = profiles.map((input: string) => {
         const parsed = parseProfileInput(input);
         return {
