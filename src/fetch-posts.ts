@@ -6,12 +6,11 @@ import { missingCredentials, profileNotFound, apiError, isAppError } from './err
 import { createLogger } from './logger.ts';
 import { getCutoffDate, isWithinDateRange, normalizePost } from './date-utils.ts';
 import { saveOutputs } from './output.ts';
+import { withRetry, waitBetweenBatches, isRateLimited } from './rate-limiter.ts';
 import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MONTHS,
   DEFAULT_OUTPUT_DIR,
-  BATCH_DELAY_MS,
-  RATE_LIMIT_DELAY_MS,
   ENV,
 } from './constants.ts';
 
@@ -37,7 +36,11 @@ function initializeClient(credentials: { liAt: string; jsessionId: string }): vo
 async function resolveProfileId(identifier: string): Promise<string> {
   log.info({ identifier }, 'Resolving profile ID');
 
-  const profileId = await extractProfileIdLinkedin(identifier);
+  const profileId = await withRetry(
+    () => extractProfileIdLinkedin(identifier),
+    { operation: 'resolveProfileId' }
+  );
+  
   if (!profileId) {
     log.error({ identifier }, 'Profile not found');
     throw profileNotFound(identifier);
@@ -48,7 +51,10 @@ async function resolveProfileId(identifier: string): Promise<string> {
 }
 
 async function fetchBatch(identifier: string, start: number, count: number): Promise<LinkedInPost[]> {
-  const posts = await getUserPosts({ identifier, start, count });
+  const posts = await withRetry(
+    () => getUserPosts({ identifier, start, count }),
+    { operation: 'fetchBatch' }
+  );
   return posts?.map(normalizePost) ?? [];
 }
 
@@ -67,48 +73,35 @@ async function fetchPostsPaginated(
   while (hasMore && !reachedCutoff) {
     const batchNum = Math.floor(start / batchSize) + 1;
 
-    try {
-      log.debug({ batch: batchNum, start, count: batchSize }, 'Fetching batch');
+    log.debug({ batch: batchNum, start, count: batchSize }, 'Fetching batch');
 
-      const posts = await fetchBatch(identifier, start, batchSize);
+    const posts = await fetchBatch(identifier, start, batchSize);
 
-      if (posts.length === 0) {
-        log.info({ batch: batchNum }, 'No more posts available');
+    if (posts.length === 0) {
+      log.info({ batch: batchNum }, 'No more posts available');
+      break;
+    }
+
+    for (const post of posts) {
+      if (!isWithinDateRange(post, cutoffDate)) {
+        log.info({ postDate: post.dateDescription }, 'Reached posts older than cutoff date');
+        reachedCutoff = true;
         break;
       }
+      allPosts.push(post);
+    }
 
-      for (const post of posts) {
-        if (!isWithinDateRange(post, cutoffDate)) {
-          log.info({ postDate: post.dateDescription }, 'Reached posts older than cutoff date');
-          reachedCutoff = true;
-          break;
-        }
-        allPosts.push(post);
-      }
+    log.info(
+      { batch: batchNum, postsInBatch: posts.length, postsInRange: allPosts.length },
+      'Batch processed'
+    );
 
-      log.info(
-        { batch: batchNum, postsInBatch: posts.length, postsInRange: allPosts.length },
-        'Batch processed'
-      );
+    start += batchSize;
+    hasMore = posts.length >= batchSize;
 
-      start += batchSize;
-      hasMore = posts.length >= batchSize;
-
-      if (hasMore && !reachedCutoff) {
-        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-
-      // Handle rate limiting
-      if (message.includes('429') || message.includes('rate')) {
-        log.warn({ waitMs: RATE_LIMIT_DELAY_MS }, 'Rate limited, waiting before retry');
-        await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY_MS));
-        continue;
-      }
-
-      log.error({ error: message, batch: batchNum }, 'Failed to fetch posts');
-      throw apiError(`Failed to fetch posts: ${message}`, err instanceof Error ? err : undefined);
+    // Wait between batches with jitter
+    if (hasMore && !reachedCutoff) {
+      await waitBetweenBatches();
     }
   }
 

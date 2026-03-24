@@ -1,13 +1,14 @@
-// Application constants
-
-// Default configuration values
+// Application constants and configuration
 export const DEFAULT_BATCH_SIZE = 50;
 export const DEFAULT_MONTHS = 6;
-export const DEFAULT_OUTPUT_DIR = './output';
+export const DEFAULT_OUTPUT_DIR = 'output';
 
-// Timing constants (in milliseconds)
-export const BATCH_DELAY_MS = 1000;
-export const RATE_LIMIT_DELAY_MS = 30000;
+// Rate limiting configuration
+export const BATCH_DELAY_MS = parseInt(process.env.BATCH_DELAY_MS || '1000', 10);
+export const JITTER_PERCENT = parseInt(process.env.JITTER_PERCENT || '30', 10); // 0-30% random delay
+export const RATE_LIMIT_INITIAL_DELAY_MS = parseInt(process.env.RATE_LIMIT_INITIAL_DELAY_MS || '2000', 10);
+export const RATE_LIMIT_MAX_DELAY_MS = parseInt(process.env.RATE_LIMIT_MAX_DELAY_MS || '120000', 10); // 2 min max
+export const MAX_RETRIES = parseInt(process.env.MAX_RETRIES || '5', 10);
 
 // Environment variable names
 export const ENV = {
@@ -16,5 +17,6 @@ export const ENV = {
   PROFILE_IDENTIFIER: 'PROFILE_IDENTIFIER',
   MONTHS_TO_FETCH: 'MONTHS_TO_FETCH',
   LOG_LEVEL: 'LOG_LEVEL',
-  NODE_ENV: 'NODE_ENV',
+  LOG_DIR: 'LOG_DIR',
+  LOG_FILE: 'LOG_FILE',
 } as const;
