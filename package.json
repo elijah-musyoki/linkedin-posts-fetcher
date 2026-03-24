@@ -24,11 +24,13 @@
   "license": "MIT",
   "dependencies": {
     "@florydev/linkedin-api-voyager": "^1.0.6",
+    "cac": "^7.0.0",
     "dotenv": "^16.4.7",
     "pino": "^9.6.1",
     "pino-pretty": "^13.0.0"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "typescript": "^5.8.2"
   }
 }
