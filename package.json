@@ -1,0 +1,32 @@
+{
+  "name": "linkedin-posts-fetcher",
+  "version": "1.0.0",
+  "description": "Fetch LinkedIn posts from a profile",
+  "type": "module",
+  "main": "dist/fetch-posts.js",
+  "types": "dist/fetch-posts.d.ts",
+  "scripts": {
+    "start": "node src/fetch-posts.ts",
+    "test": "node src/test-connection.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "keywords": [
+    "linkedin",
+    "scraper",
+    "posts"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "dependencies": {
+    "@florydev/linkedin-api-voyager": "^1.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "typescript": "^5.9.3"
+  }
+}
