@@ -1,18 +1,13 @@
-// LinkedIn Posts Fetcher - Main entry point
+// LinkedIn Posts Fetcher - Core library
 import 'dotenv/config';
 import { Client, getUserPosts, extractProfileIdLinkedin } from '@florydev/linkedin-api-voyager';
 import type { LinkedInPost, FetchOptions, FetchResult } from './types.ts';
-import { missingCredentials, profileNotFound, apiError, isAppError } from './errors.ts';
+import { missingCredentials, profileNotFound } from './errors.ts';
 import { createLogger } from './logger.ts';
 import { getCutoffDate, isWithinDateRange, normalizePost } from './date-utils.ts';
 import { saveOutputs } from './output.ts';
-import { withRetry, waitBetweenBatches, isRateLimited } from './rate-limiter.ts';
-import {
-  DEFAULT_BATCH_SIZE,
-  DEFAULT_MONTHS,
-  DEFAULT_OUTPUT_DIR,
-  ENV,
-} from './constants.ts';
+import { withRetry, waitBetweenBatches } from './rate-limiter.ts';
+import { DEFAULT_BATCH_SIZE, DEFAULT_OUTPUT_DIR, ENV } from './constants.ts';
 
 const log = createLogger('fetcher');
 
@@ -99,7 +94,6 @@ async function fetchPostsPaginated(
     start += batchSize;
     hasMore = posts.length >= batchSize;
 
-    // Wait between batches with jitter
     if (hasMore && !reachedCutoff) {
       await waitBetweenBatches();
     }
@@ -108,8 +102,32 @@ async function fetchPostsPaginated(
   return allPosts;
 }
 
+/**
+ * Fetch all posts from a LinkedIn profile within a date range
+ * 
+ * @param options - Fetch options
+ * @param options.identifier - LinkedIn profile identifier (username)
+ * @param options.monthsAgo - Number of months to fetch back (default: 6)
+ * @param options.batchSize - Number of posts per API call (default: 50)
+ * @param options.outputDir - Output directory for JSON/CSV files (default: output)
+ * @returns Fetch result with posts and metadata
+ * 
+ * @example
+ * ```ts
+ * const result = await fetchAllPosts({
+ *   identifier: 'yolandyan',
+ *   monthsAgo: 6,
+ * });
+ * console.log(`Fetched ${result.totalPosts} posts`);
+ * ```
+ */
 export async function fetchAllPosts(options: FetchOptions): Promise<FetchResult> {
-  const { identifier, monthsAgo, batchSize = DEFAULT_BATCH_SIZE, outputDir = DEFAULT_OUTPUT_DIR } = options;
+  const { 
+    identifier, 
+    monthsAgo, 
+    batchSize = DEFAULT_BATCH_SIZE, 
+    outputDir = DEFAULT_OUTPUT_DIR 
+  } = options;
 
   log.info('Starting LinkedIn posts fetcher');
 
@@ -141,15 +159,5 @@ export async function fetchAllPosts(options: FetchOptions): Promise<FetchResult>
   return result;
 }
 
-// CLI entry point
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const identifier = process.env[ENV.PROFILE_IDENTIFIER] ?? 'yolandyan';
-  const monthsAgo = parseInt(process.env[ENV.MONTHS_TO_FETCH] ?? String(DEFAULT_MONTHS));
-
-  fetchAllPosts({ identifier, monthsAgo })
-    .then((result) => log.info({ totalPosts: result.totalPosts }, 'All done!'))
-    .catch((err) => {
-      log.error({ error: err.message, stack: err.stack }, 'Fatal error');
-      process.exit(1);
-    });
-}
+// Re-export types for library users
+export type { LinkedInPost, FetchOptions, FetchResult } from './types.ts';

@@ -8,14 +8,26 @@ export interface LinkedInPost {
   numLikes: number;
   numComments: number;
   numShares: number;
-  media?: unknown;
-  tags?: unknown[];
+  media?: LinkedInMedia;
+  tags?: string[];
+}
+
+export interface LinkedInMedia {
+  type: 'image' | 'video' | 'document' | 'article';
+  url?: string;
+  thumbnailUrl?: string;
+  title?: string;
+  description?: string;
 }
 
 export interface FetchOptions {
+  /** LinkedIn profile identifier (username from URL) */
   identifier: string;
+  /** Number of months to fetch back (default: 6) */
   monthsAgo: number;
+  /** Number of posts per API call (default: 50) */
   batchSize?: number;
+  /** Output directory for JSON/CSV files (default: output) */
   outputDir?: string;
 }
 
@@ -49,3 +61,21 @@ export const ErrorCodes = {
 } as const;
 
 export type ErrorCode = typeof ErrorCodes[keyof typeof ErrorCodes];
+
+// CLI types
+export interface ProfileInput {
+  /** Original input string */
+  original: string;
+  /** Parsed identifier (username) */
+  identifier: string;
+  /** Full LinkedIn URL if provided */
+  url?: string;
+}
+
+export interface ProfilesConfig {
+  profiles: Array<{
+    identifier?: string;
+    url?: string;
+    months?: number;
+  }>;
+}

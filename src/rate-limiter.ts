@@ -10,6 +10,18 @@ import {
 
 const log = createLogger('rate-limiter');
 
+// Rate limit indicators for O(1) lookup
+const RATE_LIMIT_INDICATORS = new Set([
+  '429',
+  'rate limit',
+  'rate exceeded',
+  'too many requests',
+  'throttl',
+  'blocked',
+  'captcha',
+  'challenge',
+]);
+
 /**
  * Add random jitter to a delay (0-JITTER_PERCENT%)
  * Helps avoid detection patterns
@@ -93,18 +105,12 @@ export async function withRetry<T>(
 
 /**
  * Check if an error indicates rate limiting
+ * Uses Set for O(1) lookup
  */
 export function isRateLimited(message: string): boolean {
-  const rateLimitIndicators = [
-    '429',
-    'rate limit',
-    'rate exceeded',
-    'too many requests',
-    'throttl',
-    'blocked',
-    'captcha',
-    'challenge',
-  ];
   const lowerMessage = message.toLowerCase();
-  return rateLimitIndicators.some(indicator => lowerMessage.includes(indicator));
+  for (const indicator of RATE_LIMIT_INDICATORS) {
+    if (lowerMessage.includes(indicator)) return true;
+  }
+  return false;
 }
