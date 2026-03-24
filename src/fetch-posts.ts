@@ -1,253 +1,162 @@
-// LinkedIn Posts Fetcher - Fetches posts from a profile for the past N months
+// LinkedIn Posts Fetcher - Main entry point
 import 'dotenv/config';
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { Client, getUserPosts, extractProfileIdLinkedin } from '@florydev/linkedin-api-voyager';
 import type { LinkedInPost, FetchOptions, FetchResult } from './types.ts';
-import { missingCredentials, profileNotFound, apiError, rateLimited, isAppError } from './errors.ts';
+import { missingCredentials, profileNotFound, apiError, isAppError } from './errors.ts';
+import { createLogger } from './logger.ts';
+import { getCutoffDate, isWithinDateRange, normalizePost } from './date-utils.ts';
+import { saveOutputs } from './output.ts';
+import {
+  DEFAULT_BATCH_SIZE,
+  DEFAULT_MONTHS,
+  DEFAULT_OUTPUT_DIR,
+  BATCH_DELAY_MS,
+  RATE_LIMIT_DELAY_MS,
+  ENV,
+} from './constants.ts';
 
-// Configuration
-const DEFAULT_BATCH_SIZE = 50;
-const DEFAULT_MONTHS = 6;
-const DEFAULT_OUTPUT_DIR = './output';
+const log = createLogger('fetcher');
 
-/**
- * Calculate cutoff date (N months ago)
- */
-function getCutoffDate(monthsAgo: number): Date {
-  const date = new Date();
-  date.setMonth(date.getMonth() - monthsAgo);
-  return date;
-}
-
-/**
- * Parse LinkedIn's relative date description to a Date object
- * Examples: "2d", "1w", "3mo", "1y", "5d •"
- */
-function parseLinkedInDate(dateDesc: string | undefined): Date | null {
-  if (!dateDesc) return null;
-
-  // Clean up the date string (remove extra characters like "•")
-  const cleaned = dateDesc.split('•')[0].trim();
-  const now = new Date();
-  const match = cleaned.match(/^(\d+)([hdwmy])?$/i);
-
-  if (!match) {
-    // Try to parse as a regular date string
-    const parsed = new Date(cleaned);
-    if (!isNaN(parsed.getTime())) return parsed;
-    return null;
-  }
-
-  const value = parseInt(match[1]);
-  const unit = (match[2] ?? 'd').toLowerCase();
-
-  switch (unit) {
-    case 'h': // hours
-      now.setHours(now.getHours() - value);
-      break;
-    case 'd': // days
-      now.setDate(now.getDate() - value);
-      break;
-    case 'w': // weeks
-      now.setDate(now.getDate() - value * 7);
-      break;
-    case 'm': // months
-      now.setMonth(now.getMonth() - value);
-      break;
-    case 'y': // years
-      now.setFullYear(now.getFullYear() - value);
-      break;
-  }
-
-  return now;
-}
-
-/**
- * Check if a post is within the date range
- */
-function isWithinDateRange(post: { dateDescription?: string }, cutoffDate: Date): boolean {
-  const postDate = parseLinkedInDate(post.dateDescription);
-  if (!postDate) return true; // Include if we can't parse date (to be safe)
-  return postDate >= cutoffDate;
-}
-
-/**
- * Fetch all posts from a LinkedIn profile within a date range
- */
-export async function fetchAllPosts(options: FetchOptions): Promise<FetchResult> {
-  const { identifier, monthsAgo, batchSize = DEFAULT_BATCH_SIZE, outputDir = DEFAULT_OUTPUT_DIR } = options;
-
-  console.log('🚀 LinkedIn Posts Fetcher');
-  console.log('========================\n');
-
-  // Validate environment variables
-  const liAt = process.env.LINKEDIN_LI_AT;
-  const jsessionId = process.env.LINKEDIN_JSESSIONID;
+function getCredentials(): { liAt: string; jsessionId: string } {
+  const liAt = process.env[ENV.LI_AT];
+  const jsessionId = process.env[ENV.JSESSIONID];
 
   if (!liAt || !jsessionId) {
+    log.error('Missing LinkedIn credentials in environment');
     throw missingCredentials();
   }
 
-  // Initialize the client
-  console.log('📡 Initializing LinkedIn API client...');
-  Client({
-    JSESSIONID: jsessionId,
-    li_at: liAt,
-  });
+  return { liAt, jsessionId };
+}
 
-  // Get profile ID
-  console.log(`🔍 Resolving profile ID for: ${identifier}`);
-  let profileId: string;
-  try {
-    profileId = await extractProfileIdLinkedin(identifier);
-    if (!profileId) {
-      throw profileNotFound(identifier);
-    }
-    console.log(`   Profile ID: ${profileId}\n`);
-  } catch (err) {
-    if (isAppError(err)) throw err;
+function initializeClient(credentials: { liAt: string; jsessionId: string }): void {
+  log.info('Initializing LinkedIn API client');
+  Client({ JSESSIONID: credentials.jsessionId, li_at: credentials.liAt });
+}
+
+async function resolveProfileId(identifier: string): Promise<string> {
+  log.info({ identifier }, 'Resolving profile ID');
+
+  const profileId = await extractProfileIdLinkedin(identifier);
+  if (!profileId) {
+    log.error({ identifier }, 'Profile not found');
     throw profileNotFound(identifier);
   }
 
-  // Calculate cutoff date
-  const cutoffDate = getCutoffDate(monthsAgo);
-  console.log(`📅 Fetching posts from the last ${monthsAgo} months`);
-  console.log(`   Cutoff date: ${cutoffDate.toISOString().split('T')[0]}\n`);
+  log.info({ identifier, profileId }, 'Profile ID resolved');
+  return profileId;
+}
 
-  // Fetch posts with pagination
+async function fetchBatch(identifier: string, start: number, count: number): Promise<LinkedInPost[]> {
+  const posts = await getUserPosts({ identifier, start, count });
+  return posts?.map(normalizePost) ?? [];
+}
+
+async function fetchPostsPaginated(
+  identifier: string,
+  batchSize: number,
+  cutoffDate: Date
+): Promise<LinkedInPost[]> {
   const allPosts: LinkedInPost[] = [];
   let start = 0;
   let hasMore = true;
-  let totalFetched = 0;
   let reachedCutoff = false;
 
-  console.log('📥 Fetching posts...\n');
+  log.info({ batchSize, cutoffDate: cutoffDate.toISOString() }, 'Starting posts fetch');
 
   while (hasMore && !reachedCutoff) {
+    const batchNum = Math.floor(start / batchSize) + 1;
+
     try {
-      console.log(`   Batch ${Math.floor(start / batchSize) + 1}: Fetching ${batchSize} posts (start: ${start})...`);
+      log.debug({ batch: batchNum, start, count: batchSize }, 'Fetching batch');
 
-      const posts = await getUserPosts({
-        identifier,
-        start,
-        count: batchSize,
-      });
+      const posts = await fetchBatch(identifier, start, batchSize);
 
-      if (!posts || posts.length === 0) {
-        console.log('   No more posts available.');
-        hasMore = false;
+      if (posts.length === 0) {
+        log.info({ batch: batchNum }, 'No more posts available');
         break;
       }
 
-      totalFetched += posts.length;
-
-      // Process and filter posts
       for (const post of posts) {
-        // Check date
         if (!isWithinDateRange(post, cutoffDate)) {
-          console.log(`   ⏹️  Reached posts older than cutoff date. Stopping.`);
+          log.info({ postDate: post.dateDescription }, 'Reached posts older than cutoff date');
           reachedCutoff = true;
           break;
         }
-
-        // Normalize and add to collection
-        allPosts.push({
-          urn: post.urn ?? '',
-          url: post.postUrl ?? '',
-          text: post.contentText ?? post.text ?? '',
-          dateDescription: post.dateDescription ?? '',
-          numLikes: post.numLikes ?? 0,
-          numComments: post.numComments ?? 0,
-          numShares: post.numShares ?? 0,
-          media: post.media,
-          tags: post.tags,
-        });
+        allPosts.push(post);
       }
 
-      console.log(`   ✅ Fetched ${posts.length} posts. Total in range: ${allPosts.length}`);
+      log.info(
+        { batch: batchNum, postsInBatch: posts.length, postsInRange: allPosts.length },
+        'Batch processed'
+      );
 
-      // Move to next batch
       start += batchSize;
+      hasMore = posts.length >= batchSize;
 
-      // Check if we got fewer posts than requested (end of data)
-      if (posts.length < batchSize) {
-        hasMore = false;
-      }
-
-      // Add delay to avoid rate limiting
       if (hasMore && !reachedCutoff) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
-      // If it's a rate limit error, wait and retry
+      // Handle rate limiting
       if (message.includes('429') || message.includes('rate')) {
-        console.log('   ⏳ Rate limited. Waiting 30 seconds...');
-        await new Promise((resolve) => setTimeout(resolve, 30000));
+        log.warn({ waitMs: RATE_LIMIT_DELAY_MS }, 'Rate limited, waiting before retry');
+        await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY_MS));
         continue;
       }
 
+      log.error({ error: message, batch: batchNum }, 'Failed to fetch posts');
       throw apiError(`Failed to fetch posts: ${message}`, err instanceof Error ? err : undefined);
     }
   }
 
-  // Summary
-  console.log('\n📊 Summary');
-  console.log('==========');
-  console.log(`   Total posts fetched: ${totalFetched}`);
-  console.log(`   Posts in date range: ${allPosts.length}`);
-  console.log(`   Date range: Last ${monthsAgo} months`);
+  return allPosts;
+}
 
-  // Create output directory
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true });
-  }
+export async function fetchAllPosts(options: FetchOptions): Promise<FetchResult> {
+  const { identifier, monthsAgo, batchSize = DEFAULT_BATCH_SIZE, outputDir = DEFAULT_OUTPUT_DIR } = options;
 
-  // Prepare result
+  log.info('Starting LinkedIn posts fetcher');
+
+  const credentials = getCredentials();
+  initializeClient(credentials);
+  const profileId = await resolveProfileId(identifier);
+  const cutoffDate = getCutoffDate(monthsAgo);
+
+  const posts = await fetchPostsPaginated(identifier, batchSize, cutoffDate);
+
+  log.info(
+    { totalPosts: posts.length, monthsAgo, cutoffDate: cutoffDate.toISOString() },
+    'Fetch complete'
+  );
+
   const result: FetchResult = {
     profile: identifier,
     profileId,
     fetchedAt: new Date().toISOString(),
     monthsFetched: monthsAgo,
     cutoffDate: cutoffDate.toISOString(),
-    totalPosts: allPosts.length,
-    posts: allPosts,
+    totalPosts: posts.length,
+    posts,
   };
 
-  // Save to JSON
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const jsonFile = join(outputDir, `${identifier}-posts-${timestamp}.json`);
-  writeFileSync(jsonFile, JSON.stringify(result, null, 2));
-  console.log(`\n✅ Saved to: ${jsonFile}`);
-
-  // Save to CSV
-  const csvFile = join(outputDir, `${identifier}-posts-${timestamp}.csv`);
-  const csvHeader = 'URL,Date,Likes,Comments,Shares,Text\n';
-  const csvRows = allPosts
-    .map((p) => {
-      const text = (p.text ?? '').replace(/"/g, '""').replace(/\n/g, ' ').substring(0, 500);
-      return `"${p.url}","${p.dateDescription}",${p.numLikes},${p.numComments},${p.numShares},"${text}"`;
-    })
-    .join('\n');
-  writeFileSync(csvFile, csvHeader + csvRows);
-  console.log(`✅ Saved to: ${csvFile}`);
+  const { jsonFile, csvFile } = saveOutputs(result, outputDir);
+  log.info({ jsonFile, csvFile }, 'Outputs saved');
 
   return result;
 }
 
 // CLI entry point
-if (process.argv[1].endsWith('fetch-posts.ts')) {
-  const identifier = process.env.PROFILE_IDENTIFIER ?? 'yolandyan';
-  const monthsAgo = parseInt(process.env.MONTHS_TO_FETCH ?? String(DEFAULT_MONTHS));
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const identifier = process.env[ENV.PROFILE_IDENTIFIER] ?? 'yolandyan';
+  const monthsAgo = parseInt(process.env[ENV.MONTHS_TO_FETCH] ?? String(DEFAULT_MONTHS));
 
   fetchAllPosts({ identifier, monthsAgo })
-    .then((result) => {
-      console.log(`\n🎉 Done! Fetched ${result.totalPosts} posts.`);
-    })
+    .then((result) => log.info({ totalPosts: result.totalPosts }, 'All done!'))
     .catch((err) => {
-      console.error('\n❌ Fatal error:', err);
+      log.error({ error: err.message, stack: err.stack }, 'Fatal error');
       process.exit(1);
     });
 }
