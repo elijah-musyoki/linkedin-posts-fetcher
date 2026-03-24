@@ -8,6 +8,8 @@ import { getCutoffDate, isWithinDateRange, normalizePost } from './date-utils.ts
 import { saveOutputs } from './output.ts';
 import { withRetry, waitBetweenBatches } from './rate-limiter.ts';
 import { DEFAULT_BATCH_SIZE, DEFAULT_OUTPUT_DIR, ENV, API_TIMEOUT_MS } from './constants.ts';
+import { CheckpointManager, setActiveCheckpoint, type Checkpoint } from './checkpoint.ts';
+import { setupGracefulShutdown, isShuttingDownRequested } from './graceful-shutdown.ts';
 
 const log = createLogger('fetcher');
 
@@ -61,17 +63,27 @@ async function fetchBatch(identifier: string, start: number, count: number): Pro
 
 async function fetchPostsPaginated(
   identifier: string,
+  monthsAgo: number,
   batchSize: number,
-  cutoffDate: Date
+  cutoffDate: Date,
+  checkpointManager: CheckpointManager
 ): Promise<LinkedInPost[]> {
-  const allPosts: LinkedInPost[] = [];
+  // Check for existing checkpoint
+  const existing = checkpointManager.load(identifier);
   let start = 0;
+  let allPosts: LinkedInPost[] = [];
   let hasMore = true;
   let reachedCutoff = false;
 
-  log.info({ batchSize, cutoffDate: cutoffDate.toISOString() }, 'Starting posts fetch');
+  if (existing && !existing.completed && existing.monthsAgo === monthsAgo) {
+    log.info({ posts: existing.posts.length, start: existing.start }, 'Resuming from checkpoint');
+    start = existing.start;
+    allPosts = existing.posts as LinkedInPost[];
+  }
 
-  while (hasMore && !reachedCutoff) {
+  log.info({ batchSize, cutoffDate: cutoffDate.toISOString(), start }, 'Starting posts fetch');
+
+  while (hasMore && !reachedCutoff && !isShuttingDownRequested()) {
     const batchNum = Math.floor(start / batchSize) + 1;
 
     log.debug({ batch: batchNum, start, count: batchSize }, 'Fetching batch');
@@ -100,9 +112,29 @@ async function fetchPostsPaginated(
     start += batchSize;
     hasMore = posts.length >= batchSize;
 
-    if (hasMore && !reachedCutoff) {
+    // Save checkpoint after each batch
+    const checkpoint: Checkpoint = {
+      identifier,
+      monthsAgo,
+      batchSize,
+      cutoffDate: cutoffDate.toISOString(),
+      fetchedAt: new Date().toISOString(),
+      start,
+      posts: allPosts,
+      completed: !hasMore || reachedCutoff,
+    };
+    checkpointManager.save(checkpoint);
+    setActiveCheckpoint(checkpointManager, checkpoint);
+
+    if (hasMore && !reachedCutoff && !isShuttingDownRequested()) {
       await waitBetweenBatches();
     }
+  }
+
+  // Clear checkpoint on completion
+  if (!isShuttingDownRequested()) {
+    checkpointManager.clear(identifier);
+    setActiveCheckpoint(null, null);
   }
 
   return allPosts;
@@ -114,7 +146,7 @@ async function fetchPostsPaginated(
  * @param options - Fetch options
  * @param options.identifier - LinkedIn profile identifier (username)
  * @param options.monthsAgo - Number of months to fetch back (default: 6)
- * @param options.batchSize - Number of posts per API call (default: 50)
+ * @param options.batchSize - Number of posts per API call (default: 20)
  * @param options.outputDir - Output directory for JSON/CSV files (default: output)
  * @returns Fetch result with posts and metadata
  * 
@@ -135,6 +167,9 @@ export async function fetchAllPosts(options: FetchOptions): Promise<FetchResult>
     outputDir = DEFAULT_OUTPUT_DIR 
   } = options;
 
+  // Setup graceful shutdown
+  setupGracefulShutdown();
+
   log.info('Starting LinkedIn posts fetcher');
 
   const credentials = getCredentials();
@@ -142,7 +177,10 @@ export async function fetchAllPosts(options: FetchOptions): Promise<FetchResult>
   const profileId = await resolveProfileId(identifier);
   const cutoffDate = getCutoffDate(monthsAgo);
 
-  const posts = await fetchPostsPaginated(identifier, batchSize, cutoffDate);
+  // Initialize checkpoint manager
+  const checkpointManager = new CheckpointManager(outputDir);
+
+  const posts = await fetchPostsPaginated(identifier, monthsAgo, batchSize, cutoffDate, checkpointManager);
 
   log.info(
     { totalPosts: posts.length, monthsAgo, cutoffDate: cutoffDate.toISOString() },
